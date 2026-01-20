@@ -262,8 +262,10 @@ def main():
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.log("model_info", parameters_count=model_params)
     
-    opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps)
+    # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #original
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #original
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #new Solution1
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #new
 
     def evaluate():
         model.eval()
