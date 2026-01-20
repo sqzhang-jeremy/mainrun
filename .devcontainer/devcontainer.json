@@ -7,5 +7,8 @@
 	"hostRequirements": {
 		"gpu": "optional"
 	},
+	"runArgs": [
+		"--gpus=all"
+	],
 	"remoteUser": "root"
 }
