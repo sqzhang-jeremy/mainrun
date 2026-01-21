@@ -21,9 +21,10 @@ class Hyperparameters:
     n_head: int = 8
     d_model: int = 512
     dropout: float = 0.1
-    lr: float = 6e-3 #original
+    # lr: float = 6e-3 #original
     lr: float = 3e-4 #new Solution2
     weight_decay: float = 0.0 #original
+    weight_decay: float = 0.1 #new Solution3
     evals_per_epoch: int = 3
     
     epochs: int = 7
@@ -267,7 +268,7 @@ def main():
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #original
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #new Solution1
 
-    # Warmup + Cosine Decay scheduler
+    # new Solution2: Warmup + Cosine Decay scheduler
     warmup_steps = int(0.05 * max_steps)  # 5% warmup
     def lr_lambda(current_step):
         if current_step < warmup_steps:
