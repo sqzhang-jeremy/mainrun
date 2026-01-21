@@ -22,7 +22,7 @@ class Hyperparameters:
     d_model: int = 512
     dropout: float = 0.1
     lr: float = 3e-4 #new Solution2 (was 6e-3)
-    weight_decay: float = 0.1 #new Solution3:  L2 regularization (was 0.0)
+    weight_decay: float = 0.0
     evals_per_epoch: int = 3
     
     epochs: int = 7
