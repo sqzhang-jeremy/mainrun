@@ -24,7 +24,7 @@ class Hyperparameters:
     lr: float = 3e-4 #new Solution2 (was 6e-3)
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
-    mlp_ratio: float = 5.0
+    mlp_ratio: float = 6.0
     
     epochs: int = 7
     seed: int = 1337
