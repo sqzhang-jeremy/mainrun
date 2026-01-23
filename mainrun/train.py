@@ -18,12 +18,13 @@ class Hyperparameters:
     batch_size: int = 128
     vocab_size: int = 16_000
     n_layer: int = 8
-    n_head: int = 10
-    d_model: int = 640
+    n_head: int = 9
+    d_model: int = 576
     dropout: float = 0
     lr: float = 3e-4 #new Solution2 (was 6e-3)
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
+    mlp_ratio: float = 4.0
     
     epochs: int = 7
     seed: int = 1337
@@ -132,6 +133,7 @@ class GPTConfig:
     n_head: int
     d_model: int
     dropout: float
+    mlp_ratio: float
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: GPTConfig):
@@ -160,10 +162,11 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
+        hidden_dim = int(cfg.mlp_ratio * cfg.d_model)
         self.net = nn.Sequential(
-            nn.Linear(cfg.d_model, 4 * cfg.d_model),
+            nn.Linear(cfg.d_model, hidden_dim),
             nn.GELU(),
-            nn.Linear(4 * cfg.d_model, cfg.d_model),
+            nn.Linear(hidden_dim, cfg.d_model),
             nn.Dropout(cfg.dropout),
         )
     def forward(self, x): return self.net(x)
@@ -260,6 +263,7 @@ def main():
         n_head     = args.n_head,
         d_model    = args.d_model,
         dropout    = args.dropout,
+        mlp_ratio  = args.mlp_ratio,
     )
     model = GPT(cfg).to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
