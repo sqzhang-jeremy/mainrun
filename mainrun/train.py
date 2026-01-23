@@ -264,7 +264,36 @@ def main():
     
     # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #original
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #original
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #new Solution1
+    
+    # weight decay with parameter groups
+    decay_params = set()
+    no_decay_params = set()
+    for module in model.modules():
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            decay_params.add(module.weight)
+        if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.GroupNorm)):
+            if module.weight is not None:
+                no_decay_params.add(module.weight)
+        for name, param in module.named_parameters(recurse=False):
+            if name.endswith("bias"):
+                no_decay_params.add(param)
+
+    for param in model.parameters():
+        if param not in decay_params:
+            no_decay_params.add(param)
+
+    decay_group = [p for p in decay_params if p.requires_grad]
+    no_decay_group = [p for p in no_decay_params if p.requires_grad and p not in decay_params]
+
+    # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #original
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #original
+    opt = torch.optim.AdamW(
+        [
+            {"params": decay_group, "weight_decay": args.weight_decay},
+            {"params": no_decay_group, "weight_decay": 0.0},
+        ],
+        lr=args.lr,
+    ) 
 
     # new Solution2: Warmup + Cosine Decay scheduler
     warmup_steps = int(0.05 * max_steps)  # 5% warmup
