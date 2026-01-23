@@ -293,6 +293,8 @@ def main():
             {"params": no_decay_group, "weight_decay": 0.0},
         ],
         lr=args.lr,
+        betas=(0.9, 0.95),
+        eps=1e-8,
     ) 
 
     # new Solution2: Warmup + Cosine Decay scheduler
