@@ -192,6 +192,11 @@ class GPT(nn.Module):
         self.head      = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
         self.apply(self._init_weights)
+        with torch.no_grad():
+            scale = 1.0 / math.sqrt(2 * cfg.n_layer)
+            for block in self.blocks:
+                block.attn.proj.weight.mul_(scale)
+                block.mlp.net[2].weight.mul_(scale)
         self.head.weight = self.token_emb.weight
 
     @staticmethod
