@@ -15,11 +15,11 @@ import structlog
 @dataclass
 class Hyperparameters:
     block_size: int = 64
-    batch_size: int = 64
+    batch_size: int = 128
     vocab_size: int = 16_000
-    n_layer: int = 8
+    n_layer: int = 4
     n_head: int = 8
-    d_model: int = 512
+    d_model: int = 384
     dropout: float = 0
     lr: float = 3e-4 #new Solution2 (was 6e-3)
     weight_decay: float = 0.1
