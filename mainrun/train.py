@@ -24,13 +24,13 @@ class Hyperparameters:
     lr: float = 3e-4 #new Solution2 (was 6e-3)
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
-    mlp_ratio: float = 5.0
+    mlp_ratio: float = 6.0
     
     epochs: int = 7
     seed: int = 1337
     num_titles: int = 100_000
     val_frac: float = 0.10
-    log_file: str = "./logs/mainrun_mlp5.0.log"
+    log_file: str = "./logs/mainrun_mlp6.0.log"
 
 def configure_logging(log_file: str):
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
