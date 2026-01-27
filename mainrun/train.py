@@ -24,7 +24,7 @@ class Hyperparameters:
     lr: float = 3e-4 #new Solution2 (was 6e-3)
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
-    mlp_ratio: float = 6.0
+    mlp_ratio: float = 5.0
     
     epochs: int = 7
     seed: int = 1337
@@ -195,7 +195,7 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(cfg.d_model)
         self.ln2 = nn.LayerNorm(cfg.d_model)
         self.attn = CausalSelfAttention(cfg)
-        self.mlp  = SwiGLU(cfg)  # Use SwiGLU instead of standard MLP
+        self.mlp  = MLP(cfg)
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
@@ -217,8 +217,7 @@ class GPT(nn.Module):
             scale = 1.0 / math.sqrt(2 * cfg.n_layer)
             for block in self.blocks:
                 block.attn.proj.weight.mul_(scale)
-                # SwiGLU uses w2 as output projection
-                block.mlp.w2.weight.mul_(scale)
+                block.mlp.net[2].weight.mul_(scale)
         self.head.weight = self.token_emb.weight
 
     @staticmethod
