@@ -159,6 +159,24 @@ class CausalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.resid_drop(self.proj(y))
 
+class SwiGLU(nn.Module):
+    """SwiGLU activation from Shazeer 2020: https://arxiv.org/abs/2002.05202
+    Uses (Swish(xW₁) ⊗ xW₃)W₂ with 8/3 expansion ratio for parameter parity.
+    Achieves 0.02-0.04 lower perplexity than GELU across model sizes.
+    """
+    def __init__(self, cfg: GPTConfig):
+        super().__init__()
+        # Use 8/3 ratio (2/3 of mlp_ratio) to maintain parameter count with 3 weight matrices
+        d_ff = int(cfg.mlp_ratio * cfg.d_model * 2 / 3)
+        self.w1 = nn.Linear(cfg.d_model, d_ff, bias=False)
+        self.w2 = nn.Linear(d_ff, cfg.d_model, bias=False)
+        self.w3 = nn.Linear(cfg.d_model, d_ff, bias=False)
+        self.dropout = nn.Dropout(cfg.dropout)
+
+    def forward(self, x):
+        # SwiGLU: (Swish(xW₁) ⊗ xW₃)W₂ where Swish = SiLU
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+
 class MLP(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
@@ -177,7 +195,7 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(cfg.d_model)
         self.ln2 = nn.LayerNorm(cfg.d_model)
         self.attn = CausalSelfAttention(cfg)
-        self.mlp  = MLP(cfg)
+        self.mlp  = SwiGLU(cfg)  # Use SwiGLU instead of standard MLP
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
@@ -199,7 +217,8 @@ class GPT(nn.Module):
             scale = 1.0 / math.sqrt(2 * cfg.n_layer)
             for block in self.blocks:
                 block.attn.proj.weight.mul_(scale)
-                block.mlp.net[2].weight.mul_(scale)
+                # SwiGLU uses w2 as output projection
+                block.mlp.w2.weight.mul_(scale)
         self.head.weight = self.token_emb.weight
 
     @staticmethod
