@@ -1,7 +1,9 @@
 import utils
+import argparse
 import math, random, time
 from dataclasses import dataclass
 import json
+import yaml
 from pathlib import Path
 
 import torch
@@ -14,23 +16,41 @@ import structlog
 
 @dataclass
 class Hyperparameters:
+    # Model architecture
     block_size: int = 64
-    batch_size: int = 128
     vocab_size: int = 16_000
     n_layer: int = 8
     n_head: int = 9
     d_model: int = 576
     dropout: float = 0
-    lr: float = 3e-4 #new Solution2 (was 6e-3)
+    mlp_ratio: float = 5.0
+    activation: str = "gelu"  # gelu or swiglu
+    residual_scaling: bool = True  # scale residual projections by 1/sqrt(2*n_layer)
+
+    # Training
+    batch_size: int = 128
+    lr: float = 3e-4
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
-    mlp_ratio: float = 5.0
-    
+    batch_mode: str = "random"  # random or sequential
+
+    # Optimizer settings
+    optimizer: str = "adamw"
+    scheduler: str = "warmup_cosine"
+    warmup_fraction: float = 0.05
+
+    # Fixed (cannot change)
     epochs: int = 7
     seed: int = 1337
     num_titles: int = 100_000
     val_frac: float = 0.10
     log_file: str = "./logs/mainrun.log"
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "Hyperparameters":
+        with open(path, 'r') as f:
+            config = yaml.safe_load(f)
+        return cls(**config)
 
 def configure_logging(log_file: str):
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
@@ -84,12 +104,23 @@ def get_titles(num_titles: int, seed: int, val_frac: float) -> str:
     n = int(num_titles * (1 - val_frac))
     return titles[:n], titles[n:]
 
-def get_batch(split_ids: torch.Tensor, block_size: int, batch_size: int, device: torch.device):
+def get_batch_random(split_ids: torch.Tensor, block_size: int, batch_size: int, device: torch.device):
+    """Random batch sampling - samples random starting positions each batch."""
     max_start = len(split_ids) - block_size - 1
     starts = torch.randint(0, max_start, (batch_size,))
     x = torch.stack([split_ids[s : s + block_size] for s in starts]).to(device)
     y = torch.stack([split_ids[s + 1 : s + 1 + block_size] for s in starts]).to(device)
     return x, y
+
+def get_batch_sequential(split_ids: torch.Tensor, ptr: int, block_size: int, batch_size: int, device: torch.device):
+    """Sequential batch sampling - advances through data in order."""
+    span = block_size * batch_size + 1
+    if ptr + span >= len(split_ids):
+        ptr = 0
+    batch = split_ids[ptr: ptr + span]
+    x = batch[:-1].view(batch_size, block_size).to(device)
+    y = batch[1:].view(batch_size, block_size).to(device)
+    return x, y, ptr + block_size * batch_size
 
 def iter_full_split(split_ids: torch.Tensor, block_size: int, batch_size: int, device: torch.device):
     span = block_size * batch_size + 1
@@ -134,6 +165,8 @@ class GPTConfig:
     d_model: int
     dropout: float
     mlp_ratio: float
+    activation: str = "gelu"  # gelu or swiglu
+    residual_scaling: bool = True  # scale residual projections by 1/sqrt(2*n_layer)
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: GPTConfig):
@@ -195,7 +228,7 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(cfg.d_model)
         self.ln2 = nn.LayerNorm(cfg.d_model)
         self.attn = CausalSelfAttention(cfg)
-        self.mlp  = MLP(cfg)
+        self.mlp = SwiGLU(cfg) if cfg.activation == "swiglu" else MLP(cfg)
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
@@ -213,11 +246,16 @@ class GPT(nn.Module):
         self.head      = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
         self.apply(self._init_weights)
-        with torch.no_grad():
-            scale = 1.0 / math.sqrt(2 * cfg.n_layer)
-            for block in self.blocks:
-                block.attn.proj.weight.mul_(scale)
-                block.mlp.net[2].weight.mul_(scale)
+        if cfg.residual_scaling:
+            with torch.no_grad():
+                scale = 1.0 / math.sqrt(2 * cfg.n_layer)
+                for block in self.blocks:
+                    block.attn.proj.weight.mul_(scale)
+                    # Handle both MLP (net[2]) and SwiGLU (w2) output projections
+                    if hasattr(block.mlp, 'net'):
+                        block.mlp.net[2].weight.mul_(scale)
+                    elif hasattr(block.mlp, 'w2'):
+                        block.mlp.w2.weight.mul_(scale)
         self.head.weight = self.token_emb.weight
 
     @staticmethod
@@ -242,7 +280,20 @@ class GPT(nn.Module):
         return logits, loss
 
 def main():
-    args = Hyperparameters()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='configs/current.yaml',
+                        help='Path to config YAML file')
+    cli_args = parser.parse_args()
+
+    # Load from config file
+    config_path = Path(__file__).parent / cli_args.config
+    if config_path.exists():
+        args = Hyperparameters.from_yaml(str(config_path))
+        print(f"Loaded config from {config_path}")
+    else:
+        args = Hyperparameters()
+        print(f"Config not found at {config_path}, using defaults")
+
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     
@@ -282,56 +333,61 @@ def main():
         d_model    = args.d_model,
         dropout    = args.dropout,
         mlp_ratio  = args.mlp_ratio,
+        activation = args.activation,
+        residual_scaling = args.residual_scaling,
     )
     model = GPT(cfg).to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.log("model_info", parameters_count=model_params)
     
-    # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #original
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #original
-    
-    # weight decay with parameter groups
-    decay_params = set()
-    no_decay_params = set()
-    for module in model.modules():
-        if isinstance(module, (nn.Linear, nn.Embedding)):
-            decay_params.add(module.weight)
-        if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.GroupNorm)):
-            if module.weight is not None:
-                no_decay_params.add(module.weight)
-        for name, param in module.named_parameters(recurse=False):
-            if name.endswith("bias"):
+    # Setup optimizer based on config
+    if args.optimizer == "sgd":
+        opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optimizer == "adamw":
+        # Weight decay with parameter groups for AdamW
+        decay_params = set()
+        no_decay_params = set()
+        for module in model.modules():
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                decay_params.add(module.weight)
+            if isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.GroupNorm)):
+                if module.weight is not None:
+                    no_decay_params.add(module.weight)
+            for name, param in module.named_parameters(recurse=False):
+                if name.endswith("bias"):
+                    no_decay_params.add(param)
+
+        for param in model.parameters():
+            if param not in decay_params:
                 no_decay_params.add(param)
 
-    for param in model.parameters():
-        if param not in decay_params:
-            no_decay_params.add(param)
+        decay_group = [p for p in decay_params if p.requires_grad]
+        no_decay_group = [p for p in no_decay_params if p.requires_grad and p not in decay_params]
 
-    decay_group = [p for p in decay_params if p.requires_grad]
-    no_decay_group = [p for p in no_decay_params if p.requires_grad and p not in decay_params]
+        opt = torch.optim.AdamW(
+            [
+                {"params": decay_group, "weight_decay": args.weight_decay},
+                {"params": no_decay_group, "weight_decay": 0.0},
+            ],
+            lr=args.lr
+        )
+    else:
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
 
-    # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) #original
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps) #original
-    opt = torch.optim.AdamW(
-        [
-            {"params": decay_group, "weight_decay": args.weight_decay},
-            {"params": no_decay_group, "weight_decay": 0.0},
-        ],
-        lr=args.lr
-    ) 
-
-    # new Solution2: Warmup + Cosine Decay scheduler
-    warmup_steps = int(0.05 * max_steps)  # 5% warmup
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            # Linear warmup
-            return current_step / warmup_steps
-        else:
-            # Cosine decay
-            progress = (current_step - warmup_steps) / (max_steps - warmup_steps)
-            return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    # Setup scheduler based on config
+    if args.scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps)
+    elif args.scheduler == "warmup_cosine":
+        warmup_steps = int(args.warmup_fraction * max_steps)
+        def lr_lambda(current_step):
+            if current_step < warmup_steps:
+                return current_step / warmup_steps
+            else:
+                progress = (current_step - warmup_steps) / (max_steps - warmup_steps)
+                return 0.5 * (1.0 + math.cos(math.pi * progress))
+        scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    else:
+        raise ValueError(f"Unknown scheduler: {args.scheduler}")
 
     def evaluate():
         model.eval()
@@ -346,11 +402,15 @@ def main():
         return losses / len(val_text)
 
     step = 0
+    ptr = 0  # pointer for sequential batch mode
     t0 = time.time()
     for epoch in range(1, args.epochs + 1):
         for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}"):
             step += 1
-            xb, yb = get_batch(train_ids, args.block_size, args.batch_size, device)
+            if args.batch_mode == "random":
+                xb, yb = get_batch_random(train_ids, args.block_size, args.batch_size, device)
+            else:  # sequential
+                xb, yb, ptr = get_batch_sequential(train_ids, ptr, args.block_size, args.batch_size, device)
             _, loss = model(xb, yb)
             opt.zero_grad(set_to_none=True)
             loss.backward()

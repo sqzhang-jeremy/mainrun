@@ -16,6 +16,11 @@ tasks:
     dir: mainrun
     cmds:
       - python3 train.py
+      
+  train-baseline:
+    dir: mainrun
+    cmds:
+      - python3 train.py --config configs/baseline.yaml
 
   submit:
     deps: [checkpoint]

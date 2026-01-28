@@ -1,0 +1,31 @@
+# Original baseline hyperparameters from CLAUDE.md
+# Use this to reproduce baseline results (target to beat: 1.754 val loss)
+
+# Model architecture
+block_size: 128
+vocab_size: 16000
+n_layer: 6
+n_head: 8
+d_model: 512
+dropout: 0.1
+mlp_ratio: 4.0
+activation: gelu
+residual_scaling: false  # baseline doesn't use residual projection scaling
+
+# Training
+batch_size: 64
+lr: 0.006
+weight_decay: 0.0
+evals_per_epoch: 3
+batch_mode: sequential  # baseline uses sequential batch sampling
+
+# Optimizer settings
+optimizer: sgd
+scheduler: cosine
+
+# Fixed (do not change)
+epochs: 7
+seed: 1337
+num_titles: 100000
+val_frac: 0.10
+log_file: ./logs/mainrun.log
