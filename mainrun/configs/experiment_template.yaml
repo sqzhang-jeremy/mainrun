@@ -1,6 +1,6 @@
 # Experiment: [DESCRIPTION]
 # Date: [DATE]
-# Based on: current.yaml
+# Based on: best-0128-1814.yaml
 
 # Model architecture
 block_size: 64

@@ -281,7 +281,7 @@ class GPT(nn.Module):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/current.yaml',
+    parser.add_argument('--config', type=str, default='configs/best-0128-1814.yaml',
                         help='Path to config YAML file')
     cli_args = parser.parse_args()
 

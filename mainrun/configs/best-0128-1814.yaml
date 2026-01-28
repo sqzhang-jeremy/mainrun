@@ -1,4 +1,4 @@
-# Current hyperparameters (continuously optimizing from baseline)
+# Best hyperparameters as of 2026-01-28 18:14
 # Changes from baseline: AdamW optimizer, larger model, warmup scheduler, residual scaling, random batching
 
 # Model architecture
