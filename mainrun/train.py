@@ -30,7 +30,7 @@ class Hyperparameters:
     seed: int = 1337
     num_titles: int = 100_000
     val_frac: float = 0.10
-    log_file: str = "./logs/mainrun_mlp6.0.log"
+    log_file: str = "./logs/mainrun.log"
 
 def configure_logging(log_file: str):
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
