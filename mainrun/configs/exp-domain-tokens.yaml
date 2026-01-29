@@ -1,0 +1,40 @@
+# Experiment: Domain special tokens only
+# Date: 2026-01-29
+# Based on: best-0128-1814.yaml (change: domain_tokens false -> true)
+
+# Model architecture
+block_size: 64
+vocab_size: 16000
+n_layer: 8
+n_head: 9
+d_model: 576
+dropout: 0.0
+mlp_ratio: 5.0
+activation: gelu
+residual_scaling: true
+
+# Training
+batch_size: 128
+lr: 0.0003
+weight_decay: 0.1
+evals_per_epoch: 3
+batch_mode: random
+
+# Optimizer settings
+optimizer: adamw
+scheduler: warmup_cosine
+warmup_fraction: 0.05
+
+# Tokenizer settings
+normalizer: none
+pre_tokenizer: bytelevel
+eos_handling: string_join
+min_frequency: 1
+domain_tokens: true          # CHANGED from false
+
+# Fixed (do not change)
+epochs: 7
+seed: 1337
+num_titles: 100000
+val_frac: 0.10
+log_file: ./logs/exp-domain-tokens.log

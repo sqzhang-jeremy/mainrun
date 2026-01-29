@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from datasets import load_dataset
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
+from tokenizers import Tokenizer, Regex, models, trainers, pre_tokenizers, decoders, normalizers
 from tqdm import tqdm
 import structlog
 
@@ -38,6 +38,13 @@ class Hyperparameters:
     optimizer: str = "adamw"
     scheduler: str = "warmup_cosine"
     warmup_fraction: float = 0.05
+
+    # Tokenizer settings
+    normalizer: str = "none"           # "none" | "nfkc"
+    pre_tokenizer: str = "bytelevel"   # "bytelevel" | "whitespace"
+    eos_handling: str = "string_join"  # "string_join" | "tokenize_append"
+    min_frequency: int = 1             # Minimum token frequency (1 = keep all)
+    domain_tokens: bool = False        # Add "Show HN:", "Ask HN:", "Launch HN:"
 
     # Fixed (cannot change)
     epochs: int = 7
@@ -122,6 +129,23 @@ def get_batch_sequential(split_ids: torch.Tensor, ptr: int, block_size: int, bat
     y = batch[1:].view(batch_size, block_size).to(device)
     return x, y, ptr + block_size * batch_size
 
+def get_batch_titles(title_tokens: list[list[int]], eos_id: int, block_size: int,
+                     batch_size: int, pad_id: int, device: torch.device):
+    """Sample complete titles for training. Each sample is one title + EOS, padded to block_size."""
+    indices = torch.randint(0, len(title_tokens), (batch_size,))
+    batch_x = []
+    batch_y = []
+    for idx in indices:
+        tokens = title_tokens[idx] + [eos_id]
+        if len(tokens) > block_size + 1:
+            tokens = tokens[:block_size + 1]
+        else:
+            tokens = tokens + [pad_id] * (block_size + 1 - len(tokens))
+        batch_x.append(tokens[:-1])
+        batch_y.append(tokens[1:])
+    return (torch.tensor(batch_x, dtype=torch.long, device=device),
+            torch.tensor(batch_y, dtype=torch.long, device=device))
+
 def iter_full_split(split_ids: torch.Tensor, block_size: int, batch_size: int, device: torch.device):
     span = block_size * batch_size + 1
     for ptr in range(0, len(split_ids) - span + 1, span):
@@ -130,13 +154,39 @@ def iter_full_split(split_ids: torch.Tensor, block_size: int, batch_size: int, d
         y = batch[1:].view(batch_size, block_size).to(device)
         yield x, y
 
-def train_tokenizer(titles: list[str], vocab_size: int, unk_token: str = "<unk>", pad_token: str = "<pad>", eos_token: str = "<eos>") -> Tokenizer:
+def train_tokenizer(titles: list[str], vocab_size: int,
+                    normalizer_type: str = "none",
+                    pre_tokenizer_type: str = "bytelevel",
+                    min_frequency: int = 1,
+                    domain_tokens: bool = False,
+                    unk_token: str = "<unk>", pad_token: str = "<pad>",
+                    eos_token: str = "<eos>") -> Tokenizer:
     tokenizer = Tokenizer(models.BPE(unk_token=unk_token))
-    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel()
-    tokenizer.decoder = decoders.ByteLevel()
+
+    # Normalizer
+    if normalizer_type == "nfkc":
+        tokenizer.normalizer = normalizers.Sequence([
+            normalizers.NFKC(),
+            normalizers.Replace(Regex(r"\s+"), " "),
+            normalizers.Strip(),
+        ])
+
+    # Pre-tokenizer
+    if pre_tokenizer_type == "whitespace":
+        tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    else:  # bytelevel (default)
+        tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel()
+        tokenizer.decoder = decoders.ByteLevel()
+
+    # Special tokens
+    special_tokens = [pad_token, eos_token, unk_token]
+    if domain_tokens:
+        special_tokens.extend(["Show HN:", "Ask HN:", "Launch HN:"])
+
     trainer = trainers.BpeTrainer(
         vocab_size=vocab_size,
-        special_tokens=[pad_token, eos_token, unk_token]
+        special_tokens=special_tokens,
+        min_frequency=min_frequency,
     )
     tokenizer.train_from_iterator(titles, trainer)
     return tokenizer
@@ -265,7 +315,7 @@ class GPT(nn.Module):
             if isinstance(module, nn.Linear) and module.bias is not None:
                 nn.init.zeros_(module.bias)
 
-    def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None, ignore_index: int = -100):
         B, T = idx.size()
         tok = self.token_emb(idx)
         pos = self.pos_emb[:, :T, :]
@@ -276,7 +326,8 @@ class GPT(nn.Module):
         if targets is None:
             loss = None
         else:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
+                                   reduction='mean', ignore_index=ignore_index)
         return logits, loss
 
 def main():
@@ -309,12 +360,40 @@ def main():
     train_titles, val_titles = get_titles(args.num_titles, args.seed, args.val_frac)
     
     eos_token = "<eos>"
-    tok = BPETokenizer(train_tokenizer(train_titles+val_titles, args.vocab_size, eos_token=eos_token))
-    train_text = eos_token.join(train_titles) + eos_token
-    val_text = eos_token.join(val_titles) + eos_token
-    train_ids = torch.tensor(tok.encode(train_text), dtype=torch.long)
-    val_ids = torch.tensor(tok.encode(val_text), dtype=torch.long)
+    tok = BPETokenizer(train_tokenizer(
+        train_titles+val_titles, args.vocab_size,
+        normalizer_type=args.normalizer,
+        pre_tokenizer_type=args.pre_tokenizer,
+        min_frequency=args.min_frequency,
+        domain_tokens=args.domain_tokens,
+        eos_token=eos_token,
+    ))
+
+    # EOS handling
+    if args.eos_handling == "tokenize_append":
+        eos_id = tok.stoi[eos_token]
+        def encode_titles_with_eos(titles, tok, eos_id):
+            ids = []
+            for title in titles:
+                ids.extend(tok.encode(title))
+                ids.append(eos_id)
+            return ids
+        train_ids = torch.tensor(encode_titles_with_eos(train_titles, tok, eos_id), dtype=torch.long)
+        val_ids = torch.tensor(encode_titles_with_eos(val_titles, tok, eos_id), dtype=torch.long)
+        train_text = eos_token.join(train_titles) + eos_token  # needed for len(val_text) in evaluate()
+        val_text = eos_token.join(val_titles) + eos_token
+    else:
+        # Original: string join then tokenize
+        train_text = eos_token.join(train_titles) + eos_token
+        val_text = eos_token.join(val_titles) + eos_token
+        train_ids = torch.tensor(tok.encode(train_text), dtype=torch.long)
+        val_ids = torch.tensor(tok.encode(val_text), dtype=torch.long)
     
+    # Per-title tokens for title-aware batching
+    eos_id = tok.stoi[eos_token]
+    pad_id = tok.stoi["<pad>"]
+    train_title_tokens = [tok.encode(title) for title in train_titles]
+
     batches = len(train_ids) // (args.block_size * args.batch_size)
     max_steps = args.epochs * batches
     eval_interval = batches // args.evals_per_epoch
@@ -407,11 +486,16 @@ def main():
     for epoch in range(1, args.epochs + 1):
         for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}"):
             step += 1
-            if args.batch_mode == "random":
+            if args.batch_mode == "title_aware":
+                xb, yb = get_batch_titles(train_title_tokens, eos_id, args.block_size,
+                                          args.batch_size, pad_id, device)
+                _, loss = model(xb, yb, ignore_index=pad_id)
+            elif args.batch_mode == "random":
                 xb, yb = get_batch_random(train_ids, args.block_size, args.batch_size, device)
+                _, loss = model(xb, yb)
             else:  # sequential
                 xb, yb, ptr = get_batch_sequential(train_ids, ptr, args.block_size, args.batch_size, device)
-            _, loss = model(xb, yb)
+                _, loss = model(xb, yb)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

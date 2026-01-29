@@ -1,5 +1,6 @@
-# Best hyperparameters as of 2026-01-28 18:14
-# Changes from baseline: AdamW optimizer, larger model, warmup scheduler, residual scaling, random batching
+# Experiment: Title-aware batching
+# Date: 2026-01-29
+# Based on: best-0128-1814.yaml (change: batch_mode random -> title_aware)
 
 # Model architecture
 block_size: 64
@@ -9,15 +10,15 @@ n_head: 9
 d_model: 576
 dropout: 0.0
 mlp_ratio: 5.0
-activation: gelu  # SwiGLU explored but GELU used for best result
-residual_scaling: true  # scale residual projections by 1/sqrt(2*n_layer)
+activation: gelu
+residual_scaling: true
 
 # Training
 batch_size: 128
 lr: 0.0003
 weight_decay: 0.1
 evals_per_epoch: 3
-batch_mode: random  # random batch sampling instead of sequential
+batch_mode: title_aware     # CHANGED from random
 
 # Optimizer settings
 optimizer: adamw
@@ -36,4 +37,4 @@ epochs: 7
 seed: 1337
 num_titles: 100000
 val_frac: 0.10
-log_file: ./logs/mainrun.log
+log_file: ./logs/exp-title-aware.log
