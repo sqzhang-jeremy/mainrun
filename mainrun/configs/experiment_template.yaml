@@ -18,7 +18,7 @@ batch_size: 128
 lr: 0.0003
 weight_decay: 0.1
 evals_per_epoch: 3
-batch_mode: random  # options: random, sequential
+batch_mode: title_aware  # options: random, sequential, title_aware
 
 # Optimizer settings
 optimizer: adamw  # options: sgd, adamw
@@ -37,4 +37,4 @@ epochs: 7
 seed: 1337
 num_titles: 100000
 val_frac: 0.10
-log_file: ./logs/exp-lowercase_plus_token_combo.log
+log_file: ./logs/mainrun.log
