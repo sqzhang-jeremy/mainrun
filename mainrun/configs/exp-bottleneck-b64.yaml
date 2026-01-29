@@ -1,0 +1,46 @@
+# Experiment: Bottleneck attention only (no sparse mask), block_size=64
+# Date: 2026-01-29
+# Based on: winning lowercase+token combo (change: add bottleneck, keep causal)
+# Ablation: isolates bottleneck effect from sparse mask
+
+# Model architecture
+block_size: 64
+vocab_size: 24000
+n_layer: 8
+n_head: 9
+d_model: 576
+dropout: 0.0
+mlp_ratio: 5.0
+activation: gelu
+residual_scaling: true
+
+# Attention settings
+attention_type: causal              # Keep full causal
+attn_intermediate_dim: 288          # CHANGED: 50% bottleneck
+local_attn_ctx: 16                  # Ignored for causal
+
+# Training
+batch_size: 128
+lr: 0.0003
+weight_decay: 0.1
+evals_per_epoch: 3
+batch_mode: random
+
+# Optimizer settings
+optimizer: adamw
+scheduler: warmup_cosine
+warmup_fraction: 0.05
+
+# Tokenizer settings
+normalizer: lowercase
+pre_tokenizer: whitespace
+eos_handling: tokenize_append
+min_frequency: 2
+domain_tokens: true
+
+# Fixed (do not change)
+epochs: 7
+seed: 1337
+num_titles: 100000
+val_frac: 0.10
+log_file: ./logs/exp-bottleneck-b64.log

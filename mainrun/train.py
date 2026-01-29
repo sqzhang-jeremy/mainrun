@@ -39,6 +39,11 @@ class Hyperparameters:
     scheduler: str = "warmup_cosine"
     warmup_fraction: float = 0.05
 
+    # Attention settings
+    attention_type: str = "causal"     # "causal" | "sparse"
+    attn_intermediate_dim: int = 0     # 0 = use d_model, >0 = bottleneck dim
+    local_attn_ctx: int = 16           # Local window size for sparse attention
+
     # Tokenizer settings
     normalizer: str = "none"           # "none" | "nfkc"
     pre_tokenizer: str = "bytelevel"   # "bytelevel" | "whitespace"
@@ -224,15 +229,20 @@ class GPTConfig:
     mlp_ratio: float
     activation: str = "gelu"  # gelu or swiglu
     residual_scaling: bool = True  # scale residual projections by 1/sqrt(2*n_layer)
+    attention_type: str = "causal"  # causal or sparse
+    attn_intermediate_dim: int = 0  # 0 = use d_model, >0 = bottleneck
+    local_attn_ctx: int = 16  # local window for sparse attention
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
-        assert cfg.d_model % cfg.n_head == 0
-        self.head_dim = cfg.d_model // cfg.n_head
+        intermediate_dim = cfg.attn_intermediate_dim if cfg.attn_intermediate_dim > 0 else cfg.d_model
+        assert intermediate_dim % cfg.n_head == 0
+        self.head_dim = intermediate_dim // cfg.n_head
         self.n_head   = cfg.n_head
-        self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model)
-        self.proj = nn.Linear(cfg.d_model, cfg.d_model)
+        self.intermediate_dim = intermediate_dim
+        self.qkv = nn.Linear(cfg.d_model, 3 * intermediate_dim)
+        self.proj = nn.Linear(intermediate_dim, cfg.d_model)
         self.attn_drop = nn.Dropout(cfg.dropout)
         self.resid_drop= nn.Dropout(cfg.dropout)
         self.register_buffer("tril", torch.tril(torch.ones(cfg.block_size, cfg.block_size)))
@@ -246,7 +256,60 @@ class CausalSelfAttention(nn.Module):
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
         y = att @ v
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = y.transpose(1, 2).contiguous().view(B, T, self.intermediate_dim)
+        return self.resid_drop(self.proj(y))
+
+class SparseCausalSelfAttention(nn.Module):
+    """Fixed sparse attention with optional bottleneck projection.
+    Each head attends to: local block + per-head vertical stripes, causally masked.
+    """
+    def __init__(self, cfg: GPTConfig):
+        super().__init__()
+        intermediate_dim = cfg.attn_intermediate_dim if cfg.attn_intermediate_dim > 0 else cfg.d_model
+        assert intermediate_dim % cfg.n_head == 0, \
+            f"attn_intermediate_dim ({intermediate_dim}) must be divisible by n_head ({cfg.n_head})"
+
+        self.head_dim = intermediate_dim // cfg.n_head
+        self.n_head = cfg.n_head
+        self.intermediate_dim = intermediate_dim
+
+        self.qkv = nn.Linear(cfg.d_model, 3 * intermediate_dim)
+        self.proj = nn.Linear(intermediate_dim, cfg.d_model)
+        self.attn_drop = nn.Dropout(cfg.dropout)
+        self.resid_drop = nn.Dropout(cfg.dropout)
+
+        mask = self._generate_fixed_sparse_mask(cfg.block_size, cfg.n_head, cfg.local_attn_ctx)
+        self.register_buffer("mask", mask)  # (1, n_head, block_size, block_size)
+
+    @staticmethod
+    def _generate_fixed_sparse_mask(block_size, n_head, local_attn_ctx):
+        """Fixed sparse pattern: local blocks + per-head vertical stripes + causal."""
+        stride = local_attn_ctx
+        masks = []
+        for h in range(n_head):
+            m = torch.zeros(block_size, block_size, dtype=torch.bool)
+            for q in range(block_size):
+                # Local block: attend to all positions in same stride-sized chunk
+                block_start = (q // stride) * stride
+                m[q, block_start:min(block_start + stride, block_size)] = True
+                # Vertical stripes: every stride-th position, offset by head index
+                offset = h % stride
+                m[q, offset::stride] = True
+                # Causal: mask out future positions
+                m[q, q + 1:] = False
+            masks.append(m)
+        return torch.stack(masks).unsqueeze(0)  # (1, n_head, T, T)
+
+    def forward(self, x: torch.Tensor):
+        B, T, C = x.size()
+        qkv = self.qkv(x).view(B, T, 3, self.n_head, self.head_dim).transpose(1, 3)
+        q, k, v = qkv[..., 0, :, :], qkv[..., 1, :, :], qkv[..., 2, :, :]
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(~self.mask[:, :, :T, :T], float("-inf"))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, self.intermediate_dim)
         return self.resid_drop(self.proj(y))
 
 class SwiGLU(nn.Module):
@@ -284,7 +347,10 @@ class Block(nn.Module):
         super().__init__()
         self.ln1 = nn.LayerNorm(cfg.d_model)
         self.ln2 = nn.LayerNorm(cfg.d_model)
-        self.attn = CausalSelfAttention(cfg)
+        if cfg.attention_type == "sparse":
+            self.attn = SparseCausalSelfAttention(cfg)
+        else:
+            self.attn = CausalSelfAttention(cfg)
         self.mlp = SwiGLU(cfg) if cfg.activation == "swiglu" else MLP(cfg)
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
@@ -421,6 +487,9 @@ def main():
         mlp_ratio  = args.mlp_ratio,
         activation = args.activation,
         residual_scaling = args.residual_scaling,
+        attention_type = args.attention_type,
+        attn_intermediate_dim = args.attn_intermediate_dim,
+        local_attn_ctx = args.local_attn_ctx,
     )
     model = GPT(cfg).to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
