@@ -170,6 +170,13 @@ def train_tokenizer(titles: list[str], vocab_size: int,
             normalizers.Replace(Regex(r"\s+"), " "),
             normalizers.Strip(),
         ])
+    elif normalizer_type == "lowercase":
+        tokenizer.normalizer = normalizers.Sequence([
+            normalizers.NFKC(),
+            normalizers.Lowercase(),
+            normalizers.Replace(Regex(r"\s+"), " "),
+            normalizers.Strip(),
+        ])
 
     # Pre-tokenizer
     if pre_tokenizer_type == "whitespace":

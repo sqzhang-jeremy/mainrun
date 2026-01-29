@@ -26,15 +26,15 @@ scheduler: warmup_cosine  # options: cosine, warmup_cosine
 warmup_fraction: 0.05
 
 # Tokenizer settings
-normalizer: none           # options: none, nfkc
-pre_tokenizer: bytelevel   # options: bytelevel, whitespace
-eos_handling: string_join   # options: string_join, tokenize_append
-min_frequency: 1            # minimum token frequency (1 = keep all)
-domain_tokens: false        # add "Show HN:", "Ask HN:", "Launch HN:" as special tokens
+normalizer: lowercase           # options: none, nfkc, lowercase
+pre_tokenizer: whitespace   # options: bytelevel, whitespace
+eos_handling: tokenize_append   # options: string_join, tokenize_append
+min_frequency: 2            # minimum token frequency (1 = keep all)， 2
+domain_tokens: true        # add "Show HN:", "Ask HN:", "Launch HN:" as special tokens
 
 # Fixed (do not change)
 epochs: 7
 seed: 1337
 num_titles: 100000
 val_frac: 0.10
-log_file: ./logs/exp-vocab-24000.log
+log_file: ./logs/exp-lowercase_plus_token_combo.log
