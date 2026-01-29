@@ -13,11 +13,13 @@ tasks:
 
   train:
     # deps: [checkpoint, download]
+    deps: [checkpoint]
     dir: mainrun
     cmds:
       - python3 train.py
       
   train-baseline:
+    deps: [checkpoint]
     dir: mainrun
     cmds:
       - python3 train.py --config configs/baseline.yaml
