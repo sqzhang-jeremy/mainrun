@@ -127,7 +127,7 @@ def interactive_mode(model, tok, cfg, device):
     temperature = 0.8
     top_k = 50
     max_new_tokens = 60
-    num_samples = 5
+    num_samples = 3
 
     while True:
         try:

@@ -30,7 +30,7 @@ Enhanced training script that saves model checkpoints during training.
 
 **Usage:**
 ```bash
-python experiment_playground/train_with_checkpoint.py
+python mainrun/train_with_checkpoint.py --config configs/exp-sparse-b64.yaml
 ```
 
 **Features:**
@@ -55,10 +55,10 @@ Load a trained model and interactively generate Hacker News title predictions.
 **Usage:**
 ```bash
 # Use default checkpoint location
-python experiment_playground/test_model.py --checkpoint checkpoints/best_model.pt
+python mainrun/test_model.py --checkpoint checkpoints/best_model.pt
 
 # Or specify custom checkpoint
-python experiment_playground/test_model.py --checkpoint /path/to/checkpoint.pt
+python mainrun/test_model.py --checkpoint /path/to/checkpoint.pt
 ```
 
 **Interactive Commands:**
@@ -100,12 +100,12 @@ python experiment_playground/test_model.py --checkpoint /path/to/checkpoint.pt
 
 2. **Train the model with checkpoints**:
    ```bash
-   python experiment_playground/train_with_checkpoint.py
+   python mainrun/train_with_checkpoint.py --config configs/exp-sparse-b64.yaml
    ```
 
 3. **Test the model interactively**:
    ```bash
-   python experiment_playground/test_model.py --checkpoint checkpoints/best_model.pt
+   python mainrun/test_model.py --checkpoint checkpoints/best_model.pt
    ```
 
 ---
